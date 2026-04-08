@@ -1,7 +1,7 @@
 services:
   db:
     image: postgres:16-alpine
-    container_name: templatehouse-db
+    container_name: templateallflix-db
     restart: unless-stopped
     environment:
       POSTGRES_DB: templatehouse
@@ -14,11 +14,26 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: templatehouse-redis
+    container_name: templateallflix-redis
     restart: unless-stopped
     volumes:
       - redis-data:/data
 
+  minio:
+    image: minio/minio
+    container_name: templateallflix-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: templateallflix
+      MINIO_ROOT_PASSWORD: minio_secret_2026
+    volumes:
+      - minio-data:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+
 volumes:
   db-data:
   redis-data:
+  minio-data:
