@@ -1,0 +1,24 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: templatehouse-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: templatehouse
+      POSTGRES_USER: templatehouse
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-th_secret_2026}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    ports:
+      - "5434:5432"
+
+  redis:
+    image: redis:7-alpine
+    container_name: templatehouse-redis
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+
+volumes:
+  db-data:
+  redis-data:
