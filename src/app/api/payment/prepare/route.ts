@@ -1,12 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
+import { createOrder } from "@/lib/paypal";
 import { z } from "zod";
 
 const schema = z.object({
   templateId: z.string(),
   couponCode: z.string().optional(),
 });
+
+// 템플릿 가격 (USD)
+function krwToUsd(krw: number): string {
+  return (krw / 1400).toFixed(2); // 고정 환율, 추후 API 연동 가능
+}
 
 export async function POST(req: NextRequest) {
   const session = await auth();
@@ -23,54 +29,37 @@ export async function POST(req: NextRequest) {
     where: { id: templateId, isActive: true },
     select: { id: true, title: true, price: true, isPremium: true },
   });
-  if (!template || !template.isPremium || !template.price) {
+  if (!template?.isPremium || !template.price) {
     return NextResponse.json({ error: "유료 템플릿이 아닙니다" }, { status: 400 });
   }
 
-  // 이미 구매했는지 확인
   const existing = await prisma.purchase.findFirst({
     where: { userId: session.user.id, templateId, status: "COMPLETED" },
   });
-  if (existing) {
-    return NextResponse.json({ error: "이미 구매한 템플릿입니다" }, { status: 400 });
-  }
+  if (existing) return NextResponse.json({ error: "이미 구매한 템플릿입니다" }, { status: 400 });
 
-  let finalAmount = template.price;
+  let finalPrice = template.price;
   let couponId: string | undefined;
 
-  // 쿠폰 적용
   if (couponCode) {
-    const coupon = await prisma.coupon.findUnique({
-      where: { code: couponCode, isActive: true },
-    });
+    const coupon = await prisma.coupon.findUnique({ where: { code: couponCode.toUpperCase(), isActive: true } });
     if (coupon && (!coupon.expiresAt || coupon.expiresAt > new Date())) {
-      const alreadyUsed = await prisma.couponUse.findUnique({
+      const used = await prisma.couponUse.findUnique({
         where: { couponId_userId: { couponId: coupon.id, userId: session.user.id } },
       });
-      if (!alreadyUsed && (!coupon.maxUses || coupon.usedCount < coupon.maxUses)) {
-        if (coupon.type === "PERCENT") {
-          finalAmount = Math.floor(finalAmount * (1 - coupon.value / 100));
-        } else {
-          finalAmount = Math.max(0, finalAmount - coupon.value);
-        }
+      if (!used && (!coupon.maxUses || coupon.usedCount < coupon.maxUses)) {
+        finalPrice = coupon.type === "PERCENT"
+          ? Math.floor(finalPrice * (1 - coupon.value / 100))
+          : Math.max(0, finalPrice - coupon.value);
         couponId = coupon.id;
       }
     }
   }
 
-  // 주문 ID 생성
-  const orderId = `th_${Date.now()}_${session.user.id.slice(-6)}`;
+  const amountUsd = krwToUsd(finalPrice);
+  const customId = `${session.user.id}|${templateId}|${couponId ?? ""}`;
 
-  return NextResponse.json({
-    orderId,
-    templateTitle: template.title,
-    amount: finalAmount,
-    originalAmount: template.price,
-    couponId,
-    storeId: process.env.NEXT_PUBLIC_PORTONE_STORE_ID,
-    channelKey: process.env.NEXT_PUBLIC_PORTONE_CHANNEL_KEY,
-    userId: session.user.id,
-    userEmail: session.user.email,
-    userName: session.user.name,
-  });
+  const order = await createOrder(amountUsd, `TemplateHouse: ${template.title}`, customId);
+
+  return NextResponse.json({ orderId: order.id, amountUsd, couponId });
 }
